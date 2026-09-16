@@ -55,6 +55,15 @@ def _dynamic_factory(real_class):
     return _enum_factory(real_class)
 
   def factory(*args, **kwargs):
+    if real_class.__name__ == 'Buffer':
+      # Tinygrad, before compile_modeld moved to tg, serialized lb_refcount at index 6. It has been removed.
+      if len(args) >= 7 and isinstance(args[6], int):
+        args = tuple(list(args[:6]) + list(args[7:]))
+    elif real_class.__name__ == 'UOp':
+      # Legacy: (op, dtype, src, arg) -> Modern: (op, src, arg, tag)
+      if len(args) >= 2 and type(args[1]).__name__ == 'DType':
+        args = tuple([args[0]] + list(args[2:]))
+
     try:
       return real_class(*args, **kwargs)
     except TypeError:
@@ -98,3 +107,17 @@ def load_oob(f):
       f.readinto(pb)
       yield pb
   return DynamicTinygradUnpickler(io.BytesIO(opcodes), buffers=buffers()).load()
+
+
+def dump_oob(obj, f):
+  buffers = []
+  def buffer_cb(buffer):
+    buffers.append(buffer)
+    return False
+
+  opcodes = pickle.dumps(obj, protocol=5, buffer_callback=buffer_cb)
+  f.write(struct.pack('<q', len(opcodes)))
+  f.write(opcodes)
+  for b in buffers:
+    f.write(struct.pack('<q', len(b.raw())))
+    f.write(b.raw())
